@@ -99,7 +99,7 @@ def get_passport_prices_for_country(country_names, driver, wait):
                 update_pricing(
                     country_name,
                     "Ionity",
-                    model["price_model_name"],
+                    model["pricing_model_name"],
                     model["subscription_price"],
                     model["price_kWh"],
                 )

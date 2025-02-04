@@ -32,7 +32,7 @@ def db():
     client.close()
 
 
-def test_insert_and_update_pricing(db_l):
+def test_insert_and_update_pricing(db):
     """
     Test the insertion and updating of pricing in the database.
 
@@ -52,14 +52,15 @@ def test_insert_and_update_pricing(db_l):
     """
     country = "TestCountry"
     provider = "TestProvider"
-    price_model_name = "TestModel"
+    pricing_model_name = "TestModel"
     subscription_price = 10.0
     price_kWh = 0.30
     new_price_kWh = 0.35
     model = {
         "country": country,
+        "currency": "EUR",
         "provider": provider,
-        "price_model_name": price_model_name,
+        "pricing_model_name": pricing_model_name,
         "price_kWh": price_kWh,
         "subscription_price": subscription_price,
     }
@@ -67,7 +68,7 @@ def test_insert_and_update_pricing(db_l):
     insert_pricing(model=model)
 
     # Verify the pricing was inserted
-    current_pricing = get_current_pricing(country, provider, price_model_name)
+    current_pricing = get_current_pricing(country, provider, pricing_model_name)
     assert current_pricing is not None, "Pricing should be inserted"
     assert current_pricing["price_kWh"] == price_kWh, "Inserted price_kWh should match"
     assert (
@@ -76,15 +77,15 @@ def test_insert_and_update_pricing(db_l):
 
     # Update the pricing
     update_pricing(
-        country, provider, price_model_name, subscription_price, new_price_kWh
+        country, provider, pricing_model_name, subscription_price, new_price_kWh
     )
 
     # Verify the old pricing was archived
-    archived_pricing = db_l.pricing.find_one(
+    archived_pricing = db.pricing.find_one(
         {
             "country": country,
             "provider": provider,
-            "price_model_name": price_model_name,
+            "pricing_model_name": pricing_model_name,
             "valid_to": {"$ne": None},
         }
     )
@@ -97,7 +98,7 @@ def test_insert_and_update_pricing(db_l):
     ), "Archived pricing should have a valid_to date"
 
     # Verify the new pricing was inserted
-    new_pricing = get_current_pricing(country, provider, price_model_name)
+    new_pricing = get_current_pricing(country, provider, pricing_model_name)
     assert new_pricing is not None, "New pricing should be inserted"
     assert (
         new_pricing["price_kWh"] == new_price_kWh
@@ -110,12 +111,16 @@ def test_insert_and_update_pricing(db_l):
     ), "New pricing should not have a valid_to date"
 
     # Clean up the test data
-    db_l.pricing.delete_many(
-        {"country": country, "provider": provider, "price_model_name": price_model_name}
+    db.pricing.delete_many(
+        {
+            "country": country,
+            "provider": provider,
+            "pricing_model_name": pricing_model_name,
+        }
     )
 
 
-def test_updating_same_price(db_l):
+def test_updating_same_price(db):
     """
     Test that updating a pricing entry with the same values does not create a new version.
 
@@ -133,28 +138,33 @@ def test_updating_same_price(db_l):
     """
     country = "TestCountry"
     provider = "TestProvider"
-    price_model_name = "TestModel"
+    pricing_model_name = "TestModel"
     subscription_price = 10.0
     price_kWh = 0.30
     model = {
         "country": country,
+        "currency": "EUR",
         "provider": provider,
-        "price_model_name": price_model_name,
+        "pricing_model_name": pricing_model_name,
         "price_kWh": price_kWh,
         "subscription_price": subscription_price,
     }
     # Insert a new pricing
     insert_pricing(model=model)
     # Update the pricing with the same values
-    update_pricing(country, provider, price_model_name, subscription_price, price_kWh)
+    update_pricing(country, provider, pricing_model_name, subscription_price, price_kWh)
     # Verify that no new pricing was inserted
-    new_pricing = get_current_pricing(country, provider, price_model_name)
+    new_pricing = get_current_pricing(country, provider, pricing_model_name)
     assert new_pricing is not None, "Pricing should still be inserted"
     assert new_pricing["version"] == 1, "Version should not be incremented"
 
     # Clean up the test data
-    db_l.pricing.delete_many(
-        {"country": country, "provider": provider, "price_model_name": price_model_name}
+    db.pricing.delete_many(
+        {
+            "country": country,
+            "provider": provider,
+            "pricing_model_name": pricing_model_name,
+        }
     )
 
 

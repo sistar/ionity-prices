@@ -40,14 +40,14 @@ def insert_pricing(model):
     )
 
 
-def get_current_pricing(country, provider, price_model):
+def get_current_pricing(country, provider, pricing_model):
     """
     Retrieve the current pricing information for a given country, provider, and price model.
 
     Args:
         country (str): The name of the country for which to retrieve pricing information.
         provider (str): The name of the provider for which to retrieve pricing information.
-        price_model (str): The name of the price model for which to retrieve pricing information.
+        pricing_model (str): The name of the price model for which to retrieve pricing information.
 
     Returns:
         dict or None: A dictionary containing the pricing information if found, otherwise None.
@@ -57,13 +57,13 @@ def get_current_pricing(country, provider, price_model):
         {
             "country": country,
             "provider": provider,
-            "price_model_name": price_model,
+            "pricing_model_name": pricing_model,
             "valid_to": None,
         }
     )
 
 
-def update_pricing(country, provider, price_model, subscription_price, new_price):
+def update_pricing(country, provider, pricing_model, subscription_price, new_price):
     """
     Updates the pricing information for a given country, provider, and price model.
 
@@ -74,7 +74,7 @@ def update_pricing(country, provider, price_model, subscription_price, new_price
     Args:
         country (str): The country for which the pricing is being updated.
         provider (str): The provider for which the pricing is being updated.
-        price_model (str): The price model name.
+        pricing_model (str): The price model name.
         subscription_price (float): The subscription price to be updated.
         new_price (float): The new price per kWh to be updated.
 
@@ -84,7 +84,7 @@ def update_pricing(country, provider, price_model, subscription_price, new_price
     coll = db.pricing
     # Archive current active version
 
-    if not (current_price := get_current_pricing(country, provider, price_model)):
+    if not (current_price := get_current_pricing(country, provider, pricing_model)):
         print("No active price found for this provider and price model.")
         return
     if (
@@ -97,7 +97,7 @@ def update_pricing(country, provider, price_model, subscription_price, new_price
         {
             "country": country,
             "provider": provider,
-            "price_model_name": price_model,
+            "pricing_model_name": pricing_model,
             "valid_to": None,
         },
         {"$set": {"valid_to": datetime.now(UTC)}},
@@ -107,7 +107,7 @@ def update_pricing(country, provider, price_model, subscription_price, new_price
         {
             "country": country,
             "provider": provider,
-            "price_model_name": price_model,
+            "pricing_model_name": pricing_model,
             "valid_from": datetime.now(UTC),
             "valid_to": None,
             "price_kWh": new_price,

@@ -7,6 +7,8 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import NoSuchElementException, TimeoutException
 
+# pylint: disable=redefined-outer-name
+
 
 @pytest.fixture(scope="module")
 def driver_and_wait():
@@ -45,7 +47,7 @@ def driver_and_wait():
     driver.quit()
 
 
-def test_country_options_not_empty(driver_and_wait_f):
+def test_country_options_not_empty(driver_and_wait):
     """
     Test that the country options dropdown on the Ionity Passport page is not empty.
 
@@ -63,7 +65,7 @@ def test_country_options_not_empty(driver_and_wait_f):
         5. Assert that each country option has non-empty text.
         6. Print the text of each country option.
     """
-    driver, wait = driver_and_wait_f
+    driver, wait = driver_and_wait
     driver.get("https://www.ionity.eu/passport")
 
     country_dropdown = wait.until(
@@ -81,7 +83,7 @@ def test_country_options_not_empty(driver_and_wait_f):
         print(option.text)
 
 
-def test_country_option_slovakia(driver_and_wait_f):
+def test_country_option_slovakia(driver_and_wait):
     """
     Test to verify that Slovakia is present in the country options on the Ionity Passport page.
 
@@ -91,7 +93,7 @@ def test_country_option_slovakia(driver_and_wait_f):
     Raises:
         AssertionError: If Slovakia is not found in the country options.
     """
-    driver, wait = driver_and_wait_f
+    driver, wait = driver_and_wait
     driver.get("https://www.ionity.eu/passport")
 
     country_dropdown = wait.until(
