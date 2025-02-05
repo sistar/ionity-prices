@@ -1,5 +1,7 @@
 # pylint: disable=missing-module-docstring
 import datetime
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import time
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -10,7 +12,12 @@ from selenium.common.exceptions import NoSuchElementException, TimeoutException
 from pymongo.mongo_client import MongoClient
 from pymongo.server_api import ServerApi
 from ionity_scrape_helpers import extract_amount_currency, extract_subscription_price
-from mongo_db_pricing import get_current_pricing, insert_pricing, update_pricing
+from mongo_db_pricing import (
+    PricingModel,
+    get_current_pricing,
+    insert_pricing,
+    update_pricing,
+)
 from uri import URI
 
 # Create a new client and connect to the server
@@ -32,8 +39,12 @@ def get_passport_prices_for_country(country_names, driver, wait):
         None: Prints the price information.
     """
 
-    for country_name in country_names:
-        print(f"Getting passport prices for {country_name}...")
+    archive_timestamp = datetime.now(ZoneInfo("UTC"))
+    # Floor to the hour
+    archive_timestamp = archive_timestamp.replace(minute=0, second=0, microsecond=0)
+
+    for country in country_names:
+        print(f"Getting passport prices for {country}...")
 
         # Wait for dropdown toggle to be interactive
         toggle = wait.until(
@@ -58,12 +69,12 @@ def get_passport_prices_for_country(country_names, driver, wait):
         options = driver.find_elements(*options_locator)
         target_option = None
         for option in options:
-            if option.text.strip() == country_name:
+            if option.text.strip() == country:
                 target_option = option
                 break
 
         if not target_option:
-            print(f"Could not find an option for {country_name}")
+            print(f"Could not find an option for {country}")
             continue
 
         # Click the target option
@@ -76,43 +87,45 @@ def get_passport_prices_for_country(country_names, driver, wait):
         for pricing_card in pricing_cards:
             l = pricing_card.text.split("\n")
             pricing_model_name = l[0]
-            price_per_kwh, currency, _ = extract_amount_currency(l[1])
+            price_per_kwh = extract_amount_currency(l[1])
             subscription_text = l[2]
             print(f"{l[0]} - {l[1]} \n {l[2]}")
-            subscription_price, _ = extract_subscription_price(subscription_text)
+            subscription_terms = extract_subscription_price(subscription_text)
             models.append(
-                {
-                    "pricing_model_name": pricing_model_name,
-                    "subscription_price": subscription_price,
-                    "currency": currency,
-                    "price_kWh": price_per_kwh,
-                }
+                PricingModel(
+                    country=country,
+                    currency=price_per_kwh.currency,
+                    provider="Ionity",
+                    pricing_model_name=pricing_model_name,
+                    price_kWh=price_per_kwh.amount,
+                    subscription_price=(
+                        subscription_terms.monthly_price.amount
+                        if subscription_terms
+                        else 0.0
+                    ),
+                    initial_subscription_price=(
+                        subscription_terms.initial_price.amount
+                        if subscription_terms
+                        else 0.0
+                    ),
+                    version=1,
+                    _id=None,
+                    valid_from=archive_timestamp,
+                    valid_to=None,
+                )
             )
-        print(models)
+
         for model in models:
-            model["country"] = country_name
-            model["timestamp"] = datetime.datetime.now()
             stored_pricing = get_current_pricing(
-                country_name, "Ionity", model["pricing_model_name"]
+                model.country, "Ionity", model.pricing_model_name
             )
             if stored_pricing:
-                update_pricing(
-                    country_name,
-                    "Ionity",
-                    model["pricing_model_name"],
-                    model["subscription_price"],
-                    model["price_kWh"],
-                )
+                if model.model_dump(
+                    exclude={"id", "valid_from", "version"}
+                ) != stored_pricing.model_dump(exclude={"id", "valid_from", "version"}):
+                    update_pricing(model)
             else:
-                model["provider"] = "Ionity"
                 insert_pricing(model)
-        price_elements = driver.find_elements(By.CLASS_NAME, "heading-style-h3")
-        if not price_elements:
-            print("No price elements found. Please update the selectors as needed.")
-        else:
-            print(f"Passport prices for {country_name}:")
-            for elem in price_elements:
-                print(" -", elem.text)
 
 
 def main():

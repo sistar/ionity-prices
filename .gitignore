@@ -1,3 +1,4 @@
 env.sh
 .myenv
 __pycache__
+.env

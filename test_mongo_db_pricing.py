@@ -3,9 +3,16 @@ import pytest
 from pymongo.mongo_client import MongoClient
 from pymongo.server_api import ServerApi
 
+# pylint: disable=redefined-outer-name
 
 # Import the functions to be tested
-from mongo_db_pricing import insert_pricing, get_current_pricing, update_pricing
+from mongo_db_pricing import (
+    PricingModel,
+    get_pricing_history,
+    insert_pricing,
+    get_current_pricing,
+    update_pricing,
+)
 from uri import URI
 
 
@@ -54,31 +61,36 @@ def test_insert_and_update_pricing(db):
     provider = "TestProvider"
     pricing_model_name = "TestModel"
     subscription_price = 10.0
-    price_kWh = 0.30
-    new_price_kWh = 0.35
-    model = {
-        "country": country,
-        "currency": "EUR",
-        "provider": provider,
-        "pricing_model_name": pricing_model_name,
-        "price_kWh": price_kWh,
-        "subscription_price": subscription_price,
-    }
+    price_kwh = 0.30
+    new_price_kwh = 0.35
+    model = PricingModel(
+        country=country,
+        currency="€",
+        provider=provider,
+        pricing_model_name=pricing_model_name,
+        price_kWh=price_kwh,
+        subscription_price=subscription_price,
+        initial_subscription_price=subscription_price,
+        version=1,
+        _id=None,
+        valid_from=None,
+        valid_to=None,
+    )
     # Insert a new pricing
     insert_pricing(model=model)
 
     # Verify the pricing was inserted
     current_pricing = get_current_pricing(country, provider, pricing_model_name)
     assert current_pricing is not None, "Pricing should be inserted"
-    assert current_pricing["price_kWh"] == price_kWh, "Inserted price_kWh should match"
+    assert current_pricing.price_kWh == price_kwh, "Inserted price_kWh should match"
     assert (
-        current_pricing["subscription_price"] == subscription_price
+        current_pricing.subscription_price == subscription_price
     ), "Inserted subscription_price should match"
 
+    current_pricing.price_kWh = new_price_kwh
+
     # Update the pricing
-    update_pricing(
-        country, provider, pricing_model_name, subscription_price, new_price_kWh
-    )
+    update_pricing(current_pricing)
 
     # Verify the old pricing was archived
     archived_pricing = db.pricing.find_one(
@@ -91,7 +103,7 @@ def test_insert_and_update_pricing(db):
     )
     assert archived_pricing is not None, "Old pricing should be archived"
     assert (
-        archived_pricing["price_kWh"] == price_kWh
+        archived_pricing["price_kWh"] == price_kwh
     ), "Archived price_kWh should match the old price"
     assert (
         archived_pricing["valid_to"] is not None
@@ -101,14 +113,12 @@ def test_insert_and_update_pricing(db):
     new_pricing = get_current_pricing(country, provider, pricing_model_name)
     assert new_pricing is not None, "New pricing should be inserted"
     assert (
-        new_pricing["price_kWh"] == new_price_kWh
+        new_pricing.price_kWh == new_price_kwh
     ), "New price_kWh should match the updated price"
     assert (
-        new_pricing["subscription_price"] == subscription_price
+        new_pricing.subscription_price == subscription_price
     ), "New subscription_price should match"
-    assert (
-        new_pricing["valid_to"] is None
-    ), "New pricing should not have a valid_to date"
+    assert new_pricing.valid_to is None, "New pricing should not have a valid_to date"
 
     # Clean up the test data
     db.pricing.delete_many(
@@ -140,24 +150,32 @@ def test_updating_same_price(db):
     provider = "TestProvider"
     pricing_model_name = "TestModel"
     subscription_price = 10.0
-    price_kWh = 0.30
-    model = {
-        "country": country,
-        "currency": "EUR",
-        "provider": provider,
-        "pricing_model_name": pricing_model_name,
-        "price_kWh": price_kWh,
-        "subscription_price": subscription_price,
-    }
+    price_kwh = 0.30
+    model = PricingModel(
+        country=country,
+        currency="€",
+        provider=provider,
+        pricing_model_name=pricing_model_name,
+        price_kWh=price_kwh,
+        subscription_price=subscription_price,
+        initial_subscription_price=subscription_price,
+        version=1,
+        _id=None,
+        valid_from=None,
+        valid_to=None,
+    )
     # Insert a new pricing
     insert_pricing(model=model)
+    model.price_kWh = price_kwh
     # Update the pricing with the same values
-    update_pricing(country, provider, pricing_model_name, subscription_price, price_kWh)
+    update_pricing(model)
     # Verify that no new pricing was inserted
     new_pricing = get_current_pricing(country, provider, pricing_model_name)
     assert new_pricing is not None, "Pricing should still be inserted"
-    assert new_pricing["version"] == 1, "Version should not be incremented"
-
+    assert new_pricing.version == 1, "Version should not be incremented"
+    assert (
+        len(get_pricing_history(country, provider, pricing_model_name)) == 1
+    ), "Pricing history should contain only one entry"
     # Clean up the test data
     db.pricing.delete_many(
         {

@@ -1,3 +1,4 @@
 selenium
 pytest
 pymongo[srv]
+pydantic

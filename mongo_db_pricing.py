@@ -1,59 +1,147 @@
 # pylint: disable=missing-module-docstring
-from datetime import datetime, UTC
+from datetime import datetime
+from typing import Optional
+from zoneinfo import ZoneInfo
+from bson import ObjectId
 from pymongo.mongo_client import MongoClient
 from pymongo.server_api import ServerApi
+from pydantic import BaseModel, Field, field_validator, model_validator
 from uri import URI
 
+
+# Pydantic model definition
+class PricingModel(BaseModel):
+    """
+    PricingModel represents the pricing details for a specific country and provider.
+
+    Attributes:
+        country (str): The country where the pricing model is applicable. Must be at least 2 characters long.
+        currency (str): The currency used for pricing. Must be exactly 3 characters long.
+        provider (str): The name of the provider offering the pricing model.
+        pricing_model_name (str): The name of the pricing model.
+        price_kWh (float): The price per kilowatt-hour. Must be greater than 0.
+        subscription_price (float): The subscription price. Must be greater than or equal to 0.
+        version (int): The version of the pricing model. Must be greater than or equal to 1.
+        id (Optional[str]): The unique identifier for the pricing model, aliased as "_id".
+
+    Methods:
+        check_currency_country_relationship(): Validates that the currency is appropriate for the specified country.
+    """
+
+    country: str = Field(..., min_length=2)
+    currency: str = Field(..., min_length=1, max_length=3)
+    provider: str
+    pricing_model_name: str
+    price_kWh: float = Field(..., gt=0)
+    subscription_price: float = Field(..., ge=0)
+    initial_subscription_price: float = Field(..., ge=0)
+    version: int = Field(..., ge=1)
+    id: Optional[str] = Field(None, alias="_id")
+    valid_to: Optional[datetime]
+    valid_from: Optional[datetime]
+
+    @field_validator("id", mode="before")
+    def convert_objectid_to_str(cls, value):  # pylint: disable=no-self-argument
+        """
+        Convert a MongoDB ObjectId to a string.
+
+        Args:
+            value: The value to be checked and potentially converted.
+
+        Returns:
+            str: The string representation of the ObjectId if the value is an ObjectId.
+            Otherwise, returns the value unchanged.
+        """
+        # If the "_id" is a MongoDB ObjectId, convert it to a string
+        if isinstance(value, ObjectId):
+            return str(value)
+        return value
+
+    @model_validator(mode="after")
+    def check_currency_country_relationship(self):
+        """
+        Checks if the currency is valid for the given country.
+
+        This method verifies if the currency specified in the instance is appropriate
+        for the country specified in the instance. It uses a predefined mapping of
+        currencies to countries to perform this validation.
+
+        Raises:
+            ValueError: If the currency is not valid for the specified country.
+
+        Returns:
+            self: The instance itself if the currency-country relationship is valid.
+        """
+        currency_country_map = {
+            "€": [
+                "Germany",
+                "France",
+                "Italy",
+                "Austria",
+                "Spain",
+                "Portugal",
+                "Netherlands",
+                "Belgium",
+                "Luxembourg",
+                "Ireland",
+                "Finland",
+                "Slovakia",
+                "Hungary",
+                "Greece",
+                "Croatia",
+                "Slovenia",
+                "Estonia",
+                "Latvia",
+                "Lithuania",
+                "Malta",
+                "Cyprus",
+                "TestCountry",
+            ],
+            "CHF": ["Switzerland"],
+            "DKR": ["Denmark"],
+            "NOK": ["Norway"],
+            "SEK": ["Sweden"],
+            "PLN": ["Poland"],
+            "USD": ["United States", "Canada"],
+            "£": ["United Kingdom"],
+            "CZK": ["Czech Republic"],
+            "HUF": ["Hungary"],
+            "RON": ["Romania"],
+            "BGN": ["Bulgaria"],
+            "HRK": ["Croatia"],
+            "ISK": ["Iceland"],
+        }
+        if self.country not in currency_country_map.get(self.currency, [self.country]):
+            raise ValueError(f"Currency {self.currency} not valid for {self.country}")
+        return self
+
+
+# Database connection
 client = MongoClient(URI, server_api=ServerApi("1"))
 db = client.get_database("charging_providers")
 
 
-def insert_pricing(model):
+def insert_pricing(model: PricingModel):
     """
-    Inserts a pricing model into the MongoDB pricing collection.
-
-    Args:
-        model (dict): A dictionary containing the pricing model details with the following keys:
-            - country (str): The country for which the pricing model is applicable.
-            - currency (str): The currency used in the pricing model.
-            - provider (str): The provider of the pricing model.
-            - pricing_model_name (str): The name of the pricing model.
-            - price_kWh (float): The price per kWh.
-            - subscription_price (float): The subscription price.
-
-    Returns:
-        None
+    Inserts a validated pricing model into MongoDB with automatic versioning
     """
     coll = db.pricing
-    coll.insert_one(
-        {
-            "country": model["country"],
-            "currency": model["currency"],
-            "provider": model["provider"],
-            "pricing_model_name": model["pricing_model_name"],
-            "valid_from": datetime.now(UTC),
-            "valid_to": None,
-            "price_kWh": model["price_kWh"],
-            "subscription_price": model["subscription_price"],
-            "version": 1,
-        }
-    )
+    document = model.model_dump() | {
+        "valid_from": datetime.now(ZoneInfo("UTC")),
+        "valid_to": None,
+        "version": 1,
+    }
+    coll.insert_one(document)
 
 
-def get_current_pricing(country, provider, pricing_model):
+def get_current_pricing(
+    country: str, provider: str, pricing_model: str
+) -> PricingModel | None:
     """
-    Retrieve the current pricing information for a given country, provider, and price model.
-
-    Args:
-        country (str): The name of the country for which to retrieve pricing information.
-        provider (str): The name of the provider for which to retrieve pricing information.
-        pricing_model (str): The name of the price model for which to retrieve pricing information.
-
-    Returns:
-        dict or None: A dictionary containing the pricing information if found, otherwise None.
+    Returns validated PricingModel or None if not found
     """
     coll = db.pricing
-    return coll.find_one(
+    result = coll.find_one(
         {
             "country": country,
             "provider": provider,
@@ -61,57 +149,60 @@ def get_current_pricing(country, provider, pricing_model):
             "valid_to": None,
         }
     )
+    return PricingModel(**result) if result else None
 
 
-def update_pricing(country, provider, pricing_model, subscription_price, new_price):
+def get_pricing_history(
+    country: str, provider: str, pricing_model: str
+) -> list[PricingModel]:
     """
-    Updates the pricing information for a given country, provider, and price model.
-
-    This function archives the current active pricing version and inserts a new version
-    with the updated pricing information. If the new price is the same as the current price,
-    the function will print a message and return without making any changes.
-
-    Args:
-        country (str): The country for which the pricing is being updated.
-        provider (str): The provider for which the pricing is being updated.
-        pricing_model (str): The price model name.
-        subscription_price (float): The subscription price to be updated.
-        new_price (float): The new price per kWh to be updated.
-
-    Returns:
-        None
+    Returns a list of all versions of the pricing model
     """
     coll = db.pricing
-    # Archive current active version
-
-    if not (current_price := get_current_pricing(country, provider, pricing_model)):
-        print("No active price found for this provider and price model.")
-        return
-    if (
-        current_price["price_kWh"] == new_price
-        and current_price["subscription_price"] == subscription_price
-    ):
-        print("New price is the same as the current price.")
-        return
-    coll.update_one(
+    result = coll.find(
         {
             "country": country,
             "provider": provider,
             "pricing_model_name": pricing_model,
-            "valid_to": None,
-        },
-        {"$set": {"valid_to": datetime.now(UTC)}},
+        }
     )
+    return [PricingModel(**doc) for doc in result]
+
+
+def update_pricing(new_data: PricingModel):
+    """
+    Updates pricing with automatic version control and validation
+    """
+    coll = db.pricing
+    current = get_current_pricing(
+        new_data.country, new_data.provider, new_data.pricing_model_name
+    )
+
+    if not current:
+        print("No active price found")
+        return
+
+    if current.model_dump(
+        exclude={"id", "valid_from", "version"}
+    ) == new_data.model_dump(exclude={"id", "valid_from", "version"}):
+        print("No changes detected")
+        return
+
+    # Archive current version
+    archive_timestamp = datetime.now(ZoneInfo("UTC"))
+    # Floor to the hour
+    archive_timestamp = archive_timestamp.replace(minute=0, second=0, microsecond=0)
+
+    update_result = coll.update_one(
+        {"_id": ObjectId(current.id)}, {"$set": {"valid_to": archive_timestamp}}
+    )
+    if not update_result.modified_count:
+        raise ValueError("Failed to archive current version")
+
     # Insert new version
-    coll.insert_one(
-        {
-            "country": country,
-            "provider": provider,
-            "pricing_model_name": pricing_model,
-            "valid_from": datetime.now(UTC),
-            "valid_to": None,
-            "price_kWh": new_price,
-            "subscription_price": subscription_price,
-            "version": current_price["version"] + 1,
-        }
-    )
+    new_doc = new_data.model_dump() | {
+        "valid_from": archive_timestamp,
+        "valid_to": None,
+        "version": current.version + 1,
+    }
+    coll.insert_one(new_doc)
