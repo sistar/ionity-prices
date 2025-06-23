@@ -1,4 +1,5 @@
 # pylint: disable=missing-module-docstring
+import time
 import pytest
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -30,18 +31,41 @@ def driver_and_wait():
 
     # Handle the cookie consent overlay if present
     driver.get("https://www.ionity.eu/passport")
-    cookie_banner = wait.until(
-        EC.presence_of_element_located((By.ID, "usercentrics-cmp-ui"))
-    )
-    try:
-        shadow_root = driver.execute_script(
-            "return arguments[0].shadowRoot", cookie_banner
-        )
-        accept_button = shadow_root.find_element(By.ID, "save")
-        accept_button.click()
-        wait.until(EC.invisibility_of_element_located((By.ID, "usercentrics-cmp-ui")))
-    except (NoSuchElementException, TimeoutException) as e:
-        print(f"Could not click the cookie consent button... {e}")
+    
+    # More robust cookie handling with multiple attempts
+    for attempt in range(3):
+        try:
+            cookie_banner = wait.until(
+                EC.presence_of_element_located((By.ID, "usercentrics-cmp-ui"))
+            )
+            
+            # Use JavaScript to click the accept button
+            driver.execute_script("""
+                const banner = document.getElementById('usercentrics-cmp-ui');
+                if (banner && banner.shadowRoot) {
+                    const saveBtn = banner.shadowRoot.getElementById('save');
+                    if (saveBtn) {
+                        saveBtn.click();
+                        return true;
+                    }
+                }
+                return false;
+            """)
+            
+            # Wait for cookie banner to disappear with longer timeout
+            wait = WebDriverWait(driver, 10)
+            wait.until(EC.invisibility_of_element_located((By.ID, "usercentrics-cmp-ui")))
+            break
+            
+        except (NoSuchElementException, TimeoutException):
+            if attempt == 2:
+                # Final attempt - just wait and hope for the best
+                time.sleep(3)
+            else:
+                time.sleep(1)
+    
+    # Final safety wait
+    time.sleep(2)
 
     yield driver, wait
     driver.quit()
@@ -66,10 +90,19 @@ def test_country_options_not_empty(driver_and_wait):
         6. Print the text of each country option.
     """
     driver, wait = driver_and_wait
-    driver.get("https://www.ionity.eu/passport")
+
+    # Aggressive approach to handle cookie banner
+    driver.execute_script("""
+        // Hide any remaining cookie banners
+        const banner = document.getElementById('usercentrics-cmp-ui');
+        if (banner) {
+            banner.style.display = 'none';
+            banner.remove();
+        }
+    """)
 
     country_dropdown = wait.until(
-        EC.presence_of_element_located((By.CSS_SELECTOR, ".pricing_dropdown-toggle"))
+        EC.element_to_be_clickable((By.CSS_SELECTOR, ".pricing_dropdown-toggle"))
     )
     country_dropdown.click()
     country_options = wait.until(
@@ -94,10 +127,25 @@ def test_country_option_slovakia(driver_and_wait):
         AssertionError: If Slovakia is not found in the country options.
     """
     driver, wait = driver_and_wait
-    driver.get("https://www.ionity.eu/passport")
+    
+    # Refresh page to ensure clean state
+    driver.refresh()
+    
+    # Aggressive approach to handle cookie banner after refresh
+    time.sleep(2)  # Give page time to load
+    driver.execute_script("""
+        // Hide any remaining cookie banners
+        const banner = document.getElementById('usercentrics-cmp-ui');
+        if (banner) {
+            banner.style.display = 'none';
+            banner.remove();
+        }
+    """)
+    
+    time.sleep(1)
 
     country_dropdown = wait.until(
-        EC.presence_of_element_located((By.CSS_SELECTOR, ".pricing_dropdown-toggle"))
+        EC.element_to_be_clickable((By.CSS_SELECTOR, ".pricing_dropdown-toggle"))
     )
     country_dropdown.click()
     country_options = wait.until(
