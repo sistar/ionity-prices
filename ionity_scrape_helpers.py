@@ -55,7 +55,7 @@ def extract_subscription_price(amount_text, period_text) -> Optional[Subscriptio
     """
 
     match = re.search(
-        r"([^\d\s]{1,3})?\s*(\d?,?\d+\.?\d+)\s*([^\d\s]{1,3})?", amount_text
+        r"([^\d\s]{1,3})?\s*(\d*,?\d+\.?\d+)\s*([^\d\s]{1,3})?", amount_text
     )
     if match:
         prefix_currency = match.group(1)

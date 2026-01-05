@@ -35,6 +35,15 @@ def test_extract_chf_subscription_price():  # pylint: disable=missing-function-d
     assert terms.yearly_additional_price.currency == "CHF", "Currency should be CHF"
 
 
+def test_extract_huf_subscription_price_with_comma():  # pylint: disable=missing-function-docstring
+    terms = extract_subscription_price("47,200 HUF", "per year")
+    assert terms is not None, "Terms should not be None"
+    assert (
+        terms.yearly_additional_price.amount == 47200.0
+    ), "Subscription price should be 47200.0"
+    assert terms.yearly_additional_price.currency == "HUF", "Currency should be HUF"
+
+
 def test_extract_no_subscription_price():  # pylint: disable=missing-function-docstring
     # Test with text that has no price pattern
     with pytest.raises(ValueError):
