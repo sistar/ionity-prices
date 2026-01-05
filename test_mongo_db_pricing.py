@@ -1,8 +1,11 @@
 # pylint: disable=missing-module-docstring
+
+import logging
+import os
 import pytest
 from pymongo.mongo_client import MongoClient
 from pymongo.server_api import ServerApi
-
+from dotenv import load_dotenv
 # pylint: disable=redefined-outer-name
 
 # Import the functions to be tested
@@ -13,7 +16,23 @@ from mongo_db_pricing import (
     get_current_pricing,
     update_pricing,
 )
-from uri import URI
+
+
+@pytest.fixture(scope="session", autouse=True)
+def load_env():
+    """
+    Load environment variables from .env file.
+    """
+    load_dotenv()
+
+    # Set up logging
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+
+    mongo_uri = os.getenv("MONGODB_URI")
+    if not mongo_uri:
+        logger.error("MONGODB_URI environment variable is not set")
+        raise ValueError("MONGODB_URI environment variable is required")
 
 
 @pytest.fixture(scope="module")
@@ -21,8 +40,10 @@ def db():
     """
     Connects to a MongoDB database and yields the database object.
 
-    This function establishes a connection to a MongoDB database using the provided URI and server API version.
-    It yields the database object for use in database operations. After the operations are complete, it closes the connection.
+    This function establishes a connection to a MongoDB database using the MONGODB_URI
+    environment variable (validated by load_env fixture) and server API version.
+    It yields the database object for use in database operations. After the operations
+    are complete, it closes the connection.
 
     Yields:
         pymongo.database.Database: The MongoDB database object.
@@ -33,7 +54,10 @@ def db():
             collection = database.get_collection("collection_name")
             collection.find_one({"key": "value"})
     """
-    client = MongoClient(URI, server_api=ServerApi("1"))
+    mongo_uri = os.getenv("MONGODB_URI")
+    if not mongo_uri:
+        raise ValueError("MONGODB_URI environment variable is not set")
+    client = MongoClient(mongo_uri, server_api=ServerApi("1"))
     db_l = client.get_database("charging_providers")
     yield db_l
     client.close()
@@ -77,20 +101,20 @@ def test_insert_and_update_pricing(db):
         valid_to=None,
     )
     # Insert a new pricing
-    insert_pricing(model=model)
+    insert_pricing(db, model=model)
 
     # Verify the pricing was inserted
-    current_pricing = get_current_pricing(country, provider, pricing_model_name)
+    current_pricing = get_current_pricing(db, country, provider, pricing_model_name)
     assert current_pricing is not None, "Pricing should be inserted"
     assert current_pricing.price_kWh == price_kwh, "Inserted price_kWh should match"
-    assert (
-        current_pricing.subscription_price == subscription_price
-    ), "Inserted subscription_price should match"
+    assert current_pricing.subscription_price == subscription_price, (
+        "Inserted subscription_price should match"
+    )
 
     current_pricing.price_kWh = new_price_kwh
 
     # Update the pricing
-    update_pricing(current_pricing)
+    update_pricing(db, new_data=current_pricing)
 
     # Verify the old pricing was archived
     archived_pricing = db.pricing.find_one(
@@ -102,22 +126,22 @@ def test_insert_and_update_pricing(db):
         }
     )
     assert archived_pricing is not None, "Old pricing should be archived"
-    assert (
-        archived_pricing["price_kWh"] == price_kwh
-    ), "Archived price_kWh should match the old price"
-    assert (
-        archived_pricing["valid_to"] is not None
-    ), "Archived pricing should have a valid_to date"
+    assert archived_pricing["price_kWh"] == price_kwh, (
+        "Archived price_kWh should match the old price"
+    )
+    assert archived_pricing["valid_to"] is not None, (
+        "Archived pricing should have a valid_to date"
+    )
 
     # Verify the new pricing was inserted
-    new_pricing = get_current_pricing(country, provider, pricing_model_name)
+    new_pricing = get_current_pricing(db, country, provider, pricing_model_name)
     assert new_pricing is not None, "New pricing should be inserted"
-    assert (
-        new_pricing.price_kWh == new_price_kwh
-    ), "New price_kWh should match the updated price"
-    assert (
-        new_pricing.subscription_price == subscription_price
-    ), "New subscription_price should match"
+    assert new_pricing.price_kWh == new_price_kwh, (
+        "New price_kWh should match the updated price"
+    )
+    assert new_pricing.subscription_price == subscription_price, (
+        "New subscription_price should match"
+    )
     assert new_pricing.valid_to is None, "New pricing should not have a valid_to date"
 
     # Clean up the test data
@@ -165,17 +189,17 @@ def test_updating_same_price(db):
         valid_to=None,
     )
     # Insert a new pricing
-    insert_pricing(model=model)
+    insert_pricing(db, model=model)
     model.price_kWh = price_kwh
     # Update the pricing with the same values
-    update_pricing(model)
+    update_pricing(db, new_data=model)
     # Verify that no new pricing was inserted
-    new_pricing = get_current_pricing(country, provider, pricing_model_name)
+    new_pricing = get_current_pricing(db, country, provider, pricing_model_name)
     assert new_pricing is not None, "Pricing should still be inserted"
     assert new_pricing.version == 1, "Version should not be incremented"
-    assert (
-        len(get_pricing_history(country, provider, pricing_model_name)) == 1
-    ), "Pricing history should contain only one entry"
+    assert len(get_pricing_history(db, country, provider, pricing_model_name)) == 1, (
+        "Pricing history should contain only one entry"
+    )
     # Clean up the test data
     db.pricing.delete_many(
         {

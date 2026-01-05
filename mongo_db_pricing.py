@@ -3,10 +3,7 @@ from datetime import datetime
 from typing import Optional
 from zoneinfo import ZoneInfo
 from bson import ObjectId
-from pymongo.mongo_client import MongoClient
-from pymongo.server_api import ServerApi
 from pydantic import BaseModel, Field, field_validator, model_validator
-from uri import URI
 
 
 # Pydantic model definition
@@ -34,7 +31,6 @@ class PricingModel(BaseModel):
     pricing_model_name: str
     price_kWh: float = Field(..., gt=0)
     subscription_price: float = Field(..., ge=0)
-    initial_subscription_price: float = Field(..., ge=0)
     version: int = Field(..., ge=1)
     id: Optional[str] = Field(None, alias="_id")
     valid_to: Optional[datetime]
@@ -116,12 +112,7 @@ class PricingModel(BaseModel):
         return self
 
 
-# Database connection
-client = MongoClient(URI, server_api=ServerApi("1"))
-db = client.get_database("charging_providers")
-
-
-def insert_pricing(model: PricingModel):
+def insert_pricing(db, model: PricingModel):
     """
     Inserts a validated pricing model into MongoDB with automatic versioning
     """
@@ -135,7 +126,7 @@ def insert_pricing(model: PricingModel):
 
 
 def get_current_pricing(
-    country: str, provider: str, pricing_model: str
+    db, country: str, provider: str, pricing_model: str
 ) -> PricingModel | None:
     """
     Returns validated PricingModel or None if not found
@@ -153,7 +144,7 @@ def get_current_pricing(
 
 
 def get_pricing_history(
-    country: str, provider: str, pricing_model: str
+    db, country: str, provider: str, pricing_model: str
 ) -> list[PricingModel]:
     """
     Returns a list of all versions of the pricing model
@@ -169,13 +160,13 @@ def get_pricing_history(
     return [PricingModel(**doc) for doc in result]
 
 
-def update_pricing(new_data: PricingModel):
+def update_pricing(db, new_data: PricingModel):
     """
     Updates pricing with automatic version control and validation
     """
     coll = db.pricing
     current = get_current_pricing(
-        new_data.country, new_data.provider, new_data.pricing_model_name
+        db, new_data.country, new_data.provider, new_data.pricing_model_name
     )
 
     if not current:
@@ -198,7 +189,6 @@ def update_pricing(new_data: PricingModel):
     )
     if not update_result.modified_count:
         raise ValueError("Failed to archive current version")
-
     # Insert new version
     new_doc = new_data.model_dump() | {
         "valid_from": archive_timestamp,

@@ -1,8 +1,9 @@
 # pylint: disable=missing-module-docstring
-import datetime
+import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import time
+import logging
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -11,6 +12,8 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import NoSuchElementException, TimeoutException
 from pymongo.mongo_client import MongoClient
 from pymongo.server_api import ServerApi
+from pymongo.errors import PyMongoError
+from dotenv import load_dotenv
 from ionity_scrape_helpers import extract_amount_currency, extract_subscription_price
 from mongo_db_pricing import (
     PricingModel,
@@ -18,11 +21,28 @@ from mongo_db_pricing import (
     insert_pricing,
     update_pricing,
 )
-from uri import URI
+
+
+load_dotenv()
+
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 # Create a new client and connect to the server
-client = MongoClient(URI, server_api=ServerApi("1"))
+mongo_uri = os.getenv("MONGODB_URI")
+if not mongo_uri:
+    logger.error("MONGODB_URI environment variable is not set")
+    raise ValueError("MONGODB_URI environment variable is required")
+
+logger.info("Connecting to MongoDB...")
+client = MongoClient(mongo_uri, server_api=ServerApi("1"))
 db = client.get_database("charging_providers")
+logger.info("Successfully connected to MongoDB database: charging_providers")
 
 
 def get_passport_prices_for_country(country_names, driver, wait):
@@ -38,35 +58,49 @@ def get_passport_prices_for_country(country_names, driver, wait):
     Returns:
         None: Prints the price information.
     """
+    logger.info("Starting to scrape prices for %d countries", len(country_names))
 
     archive_timestamp = datetime.now(ZoneInfo("UTC"))
     # Floor to the hour
     archive_timestamp = archive_timestamp.replace(minute=0, second=0, microsecond=0)
+    logger.debug("Archive timestamp set to: %s (UTC)", archive_timestamp)
 
     for country in country_names:
-        print(f"Getting passport prices for {country}...")
+        logger.info("Processing country: %s", country)
 
         # Wait for dropdown toggle to be interactive
-        toggle = wait.until(
-            EC.element_to_be_clickable((By.CSS_SELECTOR, ".pricing_dropdown-toggle"))
-        )
+        logger.debug("Waiting for dropdown toggle to be clickable for %s", country)
+        try:
+            toggle = wait.until(
+                EC.element_to_be_clickable(
+                    (By.CSS_SELECTOR, ".combi-pricing_dropdown-toggle")
+                )
+            )
+            logger.debug("Dropdown toggle is clickable")
+        except TimeoutException:
+            logger.error("Timeout waiting for dropdown toggle for country: %s", country)
+            continue
 
         # Check current visibility state of dropdown options
-        options_locator = (By.CSS_SELECTOR, ".pricing_select-dropdown-link")
+        options_locator = (By.CSS_SELECTOR, ".combi-pricing_select-dropdown-link")
         existing_options = driver.find_elements(*options_locator)
         dropdown_visible = (
             any(opt.is_displayed() for opt in existing_options)
             if existing_options
             else False
         )
+        logger.debug("Dropdown visible state: %s", dropdown_visible)
 
         # Only activate toggle if dropdown isn't visible
         if not dropdown_visible:
+            logger.debug("Clicking dropdown toggle for %s", country)
             toggle.click()
             wait.until(EC.visibility_of_element_located(options_locator))
+            logger.debug("Dropdown options are now visible")
 
         # Proceed with option selection
         options = driver.find_elements(*options_locator)
+        logger.debug("Found %d country options in dropdown", len(options))
         target_option = None
         for option in options:
             if option.text.strip() == country:
@@ -74,37 +108,90 @@ def get_passport_prices_for_country(country_names, driver, wait):
                 break
 
         if not target_option:
-            print(f"Could not find an option for {country}")
+            logger.warning("Could not find dropdown option for country: %s", country)
             continue
 
         # Click the target option
+        logger.debug("Clicking country option: %s", country)
         target_option.click()
 
         # Wait for the prices to load and print them
+        logger.debug("Waiting for pricing cards to load for %s", country)
         time.sleep(1)  # Adjust sleep time if necessary
-        pricing_cards = driver.find_elements(By.CSS_SELECTOR, ".pricing_card-top")
+        pricing_cards = driver.find_elements(
+            By.CSS_SELECTOR, ".combi_pricing-card-middle"
+        )
+        logger.info("Found %d pricing card(s) for %s", len(pricing_cards), country)
+
+        if not pricing_cards:
+            logger.warning("No pricing cards found for country: %s", country)
+            continue
+
         models = []
-        for pricing_card in pricing_cards:
-            l = pricing_card.text.split("\n")
-            pricing_model_name = l[0]
-            price_per_kwh = extract_amount_currency(l[1])
-            subscription_text = l[2]
-            print(f"{l[0]} - {l[1]} \n {l[2]}")
-            subscription_terms = extract_subscription_price(subscription_text)
-            models.append(
-                PricingModel(
+        for idx, pricing_card in enumerate(pricing_cards, 1):
+            try:
+                text_lines = pricing_card.text.split("\n")
+                pricing_model_name = text_lines[0]
+                logger.debug(
+                    "Processing pricing model %d/%d: %s",
+                    idx,
+                    len(pricing_cards),
+                    pricing_model_name,
+                )
+
+                # Extract price per kWh
+                try:
+                    price_per_kwh = extract_amount_currency(text_lines[1])
+                    logger.debug(
+                        "Extracted price per kWh: %s %s",
+                        price_per_kwh.amount,
+                        price_per_kwh.currency,
+                    )
+                except (ValueError, IndexError) as e:
+                    logger.error(
+                        "Failed to extract price per kWh for %s in %s: %s",
+                        pricing_model_name,
+                        country,
+                        e,
+                    )
+                    continue
+                if (
+                    len(text_lines) >= 4
+                    and text_lines[2] == "plus"
+                    and text_lines[4] == "per year"
+                ):
+                    # Extract subscription terms
+                    try:
+                        subscription_terms = extract_subscription_price(
+                            text_lines[3], text_lines[4]
+                        )
+                        if subscription_terms:
+                            logger.debug(
+                                "Subscription terms: %s %s",
+                                subscription_terms.yearly_additional_price.amount,
+                                subscription_terms.yearly_additional_price.currency,
+                            )
+                        else:
+                            logger.debug("No subscription fees (free subscription)")
+                    except ValueError as e:
+                        logger.warning(
+                            "Failed to extract subscription price for %s in %s: %s",
+                            pricing_model_name,
+                            country,
+                            e,
+                        )
+                        exit(1)
+                        subscription_terms = None
+
+                # Create pricing model
+                model = PricingModel(
                     country=country,
                     currency=price_per_kwh.currency,
                     provider="Ionity",
                     pricing_model_name=pricing_model_name,
                     price_kWh=price_per_kwh.amount,
                     subscription_price=(
-                        subscription_terms.monthly_price.amount
-                        if subscription_terms
-                        else 0.0
-                    ),
-                    initial_subscription_price=(
-                        subscription_terms.initial_price.amount
+                        subscription_terms.yearly_additional_price.amount
                         if subscription_terms
                         else 0.0
                     ),
@@ -113,68 +200,201 @@ def get_passport_prices_for_country(country_names, driver, wait):
                     valid_from=archive_timestamp,
                     valid_to=None,
                 )
-            )
+                models.append(model)
+                logger.info(
+                    "Created pricing model for %s - %s: %s %s/kWh, "
+                    "Subscription: %s %s/month",
+                    country,
+                    pricing_model_name,
+                    price_per_kwh.amount,
+                    price_per_kwh.currency,
+                    model.subscription_price,
+                    price_per_kwh.currency,
+                )
+            except (IndexError, ValueError) as e:
+                logger.error(
+                    "Error processing pricing card %d for %s: %s", idx, country, e
+                )
+                continue
 
+        logger.info(
+            "Processing %d pricing model(s) for database operations", len(models)
+        )
         for model in models:
+            logger.debug(
+                "Checking existing pricing for %s - %s",
+                model.country,
+                model.pricing_model_name,
+            )
             stored_pricing = get_current_pricing(
-                model.country, "Ionity", model.pricing_model_name
+                db, model.country, "Ionity", model.pricing_model_name
             )
             if stored_pricing:
-                if model.model_dump(
+                logger.debug(
+                    "Found existing pricing record for %s in %s",
+                    model.pricing_model_name,
+                    model.country,
+                )
+                # Compare models excluding id, valid_from, and version
+                model_data = model.model_dump(exclude={"id", "valid_from", "version"})
+                stored_data = stored_pricing.model_dump(
                     exclude={"id", "valid_from", "version"}
-                ) != stored_pricing.model_dump(exclude={"id", "valid_from", "version"}):
-                    update_pricing(model)
+                )
+                if model_data != stored_data:
+                    logger.info(
+                        "Price change detected for %s in %s. Updating pricing...",
+                        model.pricing_model_name,
+                        model.country,
+                    )
+                    logger.debug("Old pricing: %s", stored_data)
+                    logger.debug("New pricing: %s", model_data)
+                    try:
+                        update_pricing(db, new_data=model)
+                        logger.info(
+                            "Successfully updated pricing for %s in %s",
+                            model.pricing_model_name,
+                            model.country,
+                        )
+                    except (PyMongoError, ValueError) as e:
+                        logger.error(
+                            "Failed to update pricing for %s in %s: %s",
+                            model.pricing_model_name,
+                            model.country,
+                            e,
+                        )
+                else:
+                    logger.debug(
+                        "No changes detected for %s in %s",
+                        model.pricing_model_name,
+                        model.country,
+                    )
             else:
-                insert_pricing(model)
+                logger.info(
+                    "No existing pricing found for %s in %s. Inserting new record...",
+                    model.pricing_model_name,
+                    model.country,
+                )
+                try:
+                    insert_pricing(db, model=model)
+                    logger.info(
+                        "Successfully inserted new pricing for %s in %s",
+                        model.pricing_model_name,
+                        model.country,
+                    )
+                except (PyMongoError, ValueError) as e:
+                    logger.error(
+                        "Failed to insert pricing for %s in %s: %s",
+                        model.pricing_model_name,
+                        model.country,
+                        e,
+                    )
+
+        logger.info("Completed processing prices for %s", country)
 
 
 def main():
+    """
+    Main entry point for the Ionity price scraper.
+
+    Initializes the Chrome WebDriver, navigates to the Ionity subscriptions page,
+    handles cookie consent, extracts available countries, and scrapes pricing
+    information for all countries. Prices are stored in MongoDB with automatic
+    version control.
+
+    Raises:
+        Exception: If WebDriver initialization fails or scraping process encounters
+            an error. The exception is logged and re-raised.
+    """
+    logger.info("=" * 60)
+    logger.info("Starting Ionity price scraper")
+    logger.info("=" * 60)
+
     # Set up headless Chrome (or remove headless mode for debugging)
     chrome_options = Options()
     # chrome_options.add_argument('--headless')
-    driver = webdriver.Chrome(options=chrome_options)
+    logger.info("Initializing Chrome WebDriver")
+    try:
+        driver = webdriver.Chrome(options=chrome_options)
+        logger.info("Chrome WebDriver initialized successfully")
+    except Exception as e:
+        logger.error("Failed to initialize Chrome WebDriver: %s", e)
+        raise
 
     try:
-        url = "https://www.ionity.eu/passport"
+        url = "https://www.ionity.eu/subscriptions"
+        logger.info("Navigating to: %s", url)
         driver.get(url)
+        logger.info("Page loaded successfully")
 
         wait = WebDriverWait(driver, 15)
+        logger.debug("WebDriverWait instance created with 15 second timeout")
 
         # --- Handle the cookie consent overlay if present ---
-        cookie_banner = wait.until(
-            EC.presence_of_element_located((By.ID, "usercentrics-cmp-ui"))
-        )
+        logger.info("Waiting for cookie consent banner...")
         try:
-            shadow_root = driver.execute_script(
-                "return arguments[0].shadowRoot", cookie_banner
+            cookie_banner = wait.until(
+                EC.presence_of_element_located((By.ID, "usercentrics-cmp-ui"))
             )
-            accept_button = shadow_root.find_element(By.ID, "save")
-            accept_button.click()
-            wait.until(
-                EC.invisibility_of_element_located((By.ID, "usercentrics-cmp-ui"))
-            )
-        except (NoSuchElementException, TimeoutException) as e:
-            print(f"Could not click the cookie consent button {e}")
+            logger.debug("Cookie consent banner found")
+            try:
+                shadow_root = driver.execute_script(
+                    "return arguments[0].shadowRoot", cookie_banner
+                )
+                accept_button = shadow_root.find_element(By.ID, "save")
+                logger.debug("Found accept button in shadow root")
+                accept_button.click()
+                logger.info("Clicked cookie consent accept button")
+                wait.until(
+                    EC.invisibility_of_element_located((By.ID, "usercentrics-cmp-ui"))
+                )
+                logger.info("Cookie consent banner dismissed")
+            except (NoSuchElementException, TimeoutException) as e:
+                logger.warning("Could not click the cookie consent button: %s", e)
+        except TimeoutException:
+            logger.debug("Cookie consent banner not found or already dismissed")
 
         # Get the list of countries from the dropdown
-        country_dropdown = wait.until(
-            EC.presence_of_element_located(
-                (By.CSS_SELECTOR, ".pricing_dropdown-toggle")
+        logger.info("Extracting list of available countries from dropdown...")
+        try:
+            country_dropdown = wait.until(
+                EC.presence_of_element_located(
+                    (By.CSS_SELECTOR, ".combi-pricing_dropdown-toggle")
+                )
             )
-        )
-        country_dropdown.click()
-        country_options = wait.until(
-            EC.presence_of_all_elements_located(
-                (By.CSS_SELECTOR, ".pricing_select-dropdown-link")
+            logger.debug("Country dropdown found")
+            country_dropdown.click()
+            logger.debug("Clicked country dropdown")
+
+            country_options = wait.until(
+                EC.presence_of_all_elements_located(
+                    (By.CSS_SELECTOR, ".combi-pricing_select-dropdown-link")
+                )
             )
-        )
-        country_names = [option.text for option in country_options if option.text]
+            country_names = [option.text for option in country_options if option.text]
+            logger.info(
+                "Found %d countries: %s", len(country_names), ", ".join(country_names)
+            )
+        except TimeoutException as e:
+            logger.error("Timeout while extracting country list: %s", e)
+            raise
+        except Exception as e:
+            logger.error("Error extracting country list: %s", e)
+            raise
 
         # Query prices for each country
+        logger.info("Starting to scrape prices for all countries...")
         get_passport_prices_for_country(country_names, driver, wait)
+        logger.info("=" * 60)
+        logger.info("Scraping completed successfully")
+        logger.info("=" * 60)
 
+    except Exception as e:
+        logger.error("Error during scraping process: %s", e, exc_info=True)
+        raise
     finally:
+        logger.info("Closing WebDriver...")
         driver.quit()
+        logger.info("WebDriver closed")
 
 
 if __name__ == "__main__":

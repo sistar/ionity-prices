@@ -18,14 +18,19 @@ Usage:
     Run this script to test the connection to your MongoDB deployment. If the connection is successful, a confirmation message will be printed.
 """
 
+import os
 import argparse
 from pymongo.mongo_client import MongoClient
 from pymongo.server_api import ServerApi
 from pymongo.errors import PyMongoError
-from uri import URI
+from dotenv import load_dotenv
 
 
 def main():
+    load_dotenv()
+    mongo_uri = os.getenv("MONGODB_URI")
+    if not mongo_uri:
+        raise ValueError("MONGODB_URI environment variable is not set")
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--erase",
@@ -35,7 +40,7 @@ def main():
     )
     args = parser.parse_args()
 
-    client = MongoClient(URI, server_api=ServerApi("1"))
+    client = MongoClient(mongo_uri, server_api=ServerApi("1"))
     try:
         client.admin.command("ping")
         print("Pinged your deployment. You successfully connected to MongoDB!")
