@@ -145,6 +145,30 @@ def test_extract_amount_currency_price_per_kwh():  # pylint: disable=missing-fun
     assert money.currency == "€", "Currency should be €"
 
 
+def test_extract_amount_currency_pence():  # pylint: disable=missing-function-docstring
+    """Test that pence (p) is converted to pounds (£)."""
+    money = extract_amount_currency("43p")
+    assert money is not None, "Money should not be None"
+    assert money.amount == 0.43, "Amount should be 0.43 (43 pence = £0.43)"
+    assert money.currency == "£", "Currency should be £ (converted from p)"
+
+
+def test_extract_amount_currency_pence_with_kwh():  # pylint: disable=missing-function-docstring
+    """Test that pence with /kWh suffix is converted to pounds."""
+    money = extract_amount_currency("43p/kWh")
+    assert money is not None, "Money should not be None"
+    assert money.amount == 0.43, "Amount should be 0.43 (43 pence = £0.43)"
+    assert money.currency == "£", "Currency should be £ (converted from p)"
+
+
+def test_extract_amount_currency_decimal_pence():  # pylint: disable=missing-function-docstring
+    """Test that decimal pence values are converted correctly."""
+    money = extract_amount_currency("42.5p")
+    assert money is not None, "Money should not be None"
+    assert money.amount == 0.425, "Amount should be 0.425 (42.5 pence = £0.425)"
+    assert money.currency == "£", "Currency should be £ (converted from p)"
+
+
 if __name__ == "__main__":
 
     pytest.main()

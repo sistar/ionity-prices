@@ -31,7 +31,10 @@ class SubscriptionTerms(BaseModel):
 
 
 def extract_amount_currency(text) -> Money:
-    """Extracts the amount and currency from a string."""
+    """Extracts the amount and currency from a string.
+
+    Handles pence (p) conversion: converts pence to pounds (e.g., 43p -> £0.43).
+    """
     # if string ends in /kWh, remove it
     is_kwh_suffix = text.endswith("/kWh")
     if is_kwh_suffix:
@@ -43,6 +46,12 @@ def extract_amount_currency(text) -> Money:
         currency = prefix_currency if prefix_currency else postfix_currency
 
         amount = float(match.group(2).replace(",", ""))
+
+        # Convert pence to pounds
+        if currency and currency.strip().lower() == "p":
+            amount = amount / 100.0
+            currency = "£"
+
         return Money(amount=amount, currency=currency)
     else:
         print(f"No match found. {text}")
