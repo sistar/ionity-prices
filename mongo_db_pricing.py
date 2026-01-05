@@ -17,7 +17,9 @@ class PricingModel(BaseModel):
         provider (str): The name of the provider offering the pricing model.
         pricing_model_name (str): The name of the pricing model.
         price_kWh (float): The price per kilowatt-hour. Must be greater than 0.
-        subscription_price (float): The subscription price. Must be greater than or equal to 0.
+        monthly_subscription_price (Optional[float]): The monthly subscription price, or None if not offered.
+        yearly_subscription_price (Optional[float]): The yearly subscription price, or None if not offered.
+        initial_subscription_price (Optional[float]): Initial subscription price (deprecated, for migration only).
         version (int): The version of the pricing model. Must be greater than or equal to 1.
         id (Optional[str]): The unique identifier for the pricing model, aliased as "_id".
 
@@ -30,7 +32,9 @@ class PricingModel(BaseModel):
     provider: str
     pricing_model_name: str
     price_kWh: float = Field(..., gt=0)
-    subscription_price: float = Field(..., ge=0)
+    monthly_subscription_price: Optional[float] = Field(None, ge=0)
+    yearly_subscription_price: Optional[float] = Field(None, ge=0)
+    initial_subscription_price: Optional[float] = Field(None, ge=0)
     version: int = Field(..., ge=1)
     id: Optional[str] = Field(None, alias="_id")
     valid_to: Optional[datetime]
@@ -52,6 +56,36 @@ class PricingModel(BaseModel):
         if isinstance(value, ObjectId):
             return str(value)
         return value
+
+    @model_validator(mode="before")
+    def migrate_subscription_fields(cls, values):  # pylint: disable=no-self-argument
+        """
+        Migrate old subscription_price field to new subscription period fields.
+
+        This handles backward compatibility for existing database records that use
+        the old subscription_price field. Assumes old data represents yearly subscriptions.
+
+        Args:
+            values: The field values dictionary to be validated.
+
+        Returns:
+            dict: The migrated field values dictionary.
+        """
+        if isinstance(values, dict):
+            # If we have old field but not new fields, migrate
+            if "subscription_price" in values and "yearly_subscription_price" not in values:
+                values["yearly_subscription_price"] = values["subscription_price"]
+                values["monthly_subscription_price"] = None
+                if "initial_subscription_price" not in values:
+                    values["initial_subscription_price"] = values["subscription_price"]
+
+            # Ensure new fields exist (for old records)
+            if "monthly_subscription_price" not in values:
+                values["monthly_subscription_price"] = None
+            if "yearly_subscription_price" not in values:
+                values["yearly_subscription_price"] = None
+
+        return values
 
     @model_validator(mode="after")
     def check_currency_country_relationship(self):

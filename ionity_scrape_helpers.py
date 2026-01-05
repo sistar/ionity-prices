@@ -22,10 +22,12 @@ class SubscriptionTerms(BaseModel):
     A class to represent the terms of a subscription.
 
     Attributes:
-        yearly_additional_price (Money): The yearly subscription price.
+        monthly_additional_price (Optional[Money]): The monthly subscription price, or None if not offered.
+        yearly_additional_price (Optional[Money]): The yearly subscription price, or None if not offered.
     """
 
-    yearly_additional_price: Money
+    monthly_additional_price: Optional[Money] = None
+    yearly_additional_price: Optional[Money] = None
 
 
 def extract_amount_currency(text) -> Money:
@@ -49,23 +51,45 @@ def extract_amount_currency(text) -> Money:
 
 def extract_subscription_price(amount_text, period_text) -> Optional[SubscriptionTerms]:
     """
-    Extracts the per month subscription price and its currency from the given text,
-    returning a Money object or None if not found.
+    Extracts subscription price and its currency from the given text,
+    returning a SubscriptionTerms object with the appropriate period field populated.
+
+    Args:
+        amount_text (str): The price amount text (e.g., "€11.99", "47,200 HUF")
+        period_text (str): The period text ("per year" or "per month")
+
+    Returns:
+        SubscriptionTerms: Object with monthly_additional_price or yearly_additional_price populated
+
+    Raises:
+        ValueError: If amount_text cannot be parsed or period_text is invalid
+
     regex tests https://regex101.com/r/mSS5r0/1
     """
 
     match = re.search(
         r"([^\d\s]{1,3})?\s*(\d*,?\d+\.?\d+)\s*([^\d\s]{1,3})?", amount_text
     )
-    if match:
-        prefix_currency = match.group(1)
-        postfix_currency = match.group(3)
-        currency = prefix_currency if prefix_currency else postfix_currency
+    if not match:
+        raise ValueError(f"Could not extract subscription price from: {amount_text}")
 
-        amount = float(match.group(2).replace(",", ""))
+    prefix_currency = match.group(1)
+    postfix_currency = match.group(3)
+    currency = prefix_currency if prefix_currency else postfix_currency
 
+    amount = float(match.group(2).replace(",", ""))
+
+    # Determine which field to populate based on period_text
+    period_lower = period_text.lower().strip()
+    if period_lower == "per year":
         return SubscriptionTerms(
-            yearly_additional_price=Money(amount=amount, currency=currency)
+            yearly_additional_price=Money(amount=amount, currency=currency),
+            monthly_additional_price=None
+        )
+    elif period_lower == "per month":
+        return SubscriptionTerms(
+            monthly_additional_price=Money(amount=amount, currency=currency),
+            yearly_additional_price=None
         )
     else:
-        raise ValueError("Could not extract subscription price")
+        raise ValueError(f"Invalid period_text: '{period_text}'. Expected 'per year' or 'per month'")

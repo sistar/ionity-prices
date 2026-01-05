@@ -2,6 +2,8 @@
 
 import logging
 import os
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import pytest
 from pymongo.mongo_client import MongoClient
 from pymongo.server_api import ServerApi
@@ -93,8 +95,9 @@ def test_insert_and_update_pricing(db):
         provider=provider,
         pricing_model_name=pricing_model_name,
         price_kWh=price_kwh,
-        subscription_price=subscription_price,
-        initial_subscription_price=subscription_price,
+        monthly_subscription_price=None,
+        yearly_subscription_price=subscription_price,
+        initial_subscription_price=None,
         version=1,
         _id=None,
         valid_from=None,
@@ -107,8 +110,11 @@ def test_insert_and_update_pricing(db):
     current_pricing = get_current_pricing(db, country, provider, pricing_model_name)
     assert current_pricing is not None, "Pricing should be inserted"
     assert current_pricing.price_kWh == price_kwh, "Inserted price_kWh should match"
-    assert current_pricing.subscription_price == subscription_price, (
-        "Inserted subscription_price should match"
+    assert current_pricing.yearly_subscription_price == subscription_price, (
+        "Inserted yearly_subscription_price should match"
+    )
+    assert current_pricing.monthly_subscription_price is None, (
+        "Monthly subscription should be None"
     )
 
     current_pricing.price_kWh = new_price_kwh
@@ -139,8 +145,11 @@ def test_insert_and_update_pricing(db):
     assert new_pricing.price_kWh == new_price_kwh, (
         "New price_kWh should match the updated price"
     )
-    assert new_pricing.subscription_price == subscription_price, (
-        "New subscription_price should match"
+    assert new_pricing.yearly_subscription_price == subscription_price, (
+        "New yearly_subscription_price should match"
+    )
+    assert new_pricing.monthly_subscription_price is None, (
+        "Monthly subscription should be None"
     )
     assert new_pricing.valid_to is None, "New pricing should not have a valid_to date"
 
@@ -181,8 +190,9 @@ def test_updating_same_price(db):
         provider=provider,
         pricing_model_name=pricing_model_name,
         price_kWh=price_kwh,
-        subscription_price=subscription_price,
-        initial_subscription_price=subscription_price,
+        monthly_subscription_price=None,
+        yearly_subscription_price=subscription_price,
+        initial_subscription_price=None,
         version=1,
         _id=None,
         valid_from=None,
@@ -207,6 +217,221 @@ def test_updating_same_price(db):
             "provider": provider,
             "pricing_model_name": pricing_model_name,
         }
+    )
+
+
+def test_insert_pricing_with_both_periods(db):
+    """
+    Test insertion of a pricing model with both monthly and yearly subscriptions.
+    """
+    country = "TestCountry"
+    provider = "TestProvider"
+    pricing_model_name = "TestModelBothPeriods"
+    monthly_price = 0.99
+    yearly_price = 10.0
+    price_kwh = 0.30
+
+    model = PricingModel(
+        country=country,
+        currency="€",
+        provider=provider,
+        pricing_model_name=pricing_model_name,
+        price_kWh=price_kwh,
+        monthly_subscription_price=monthly_price,
+        yearly_subscription_price=yearly_price,
+        initial_subscription_price=None,
+        version=1,
+        _id=None,
+        valid_from=None,
+        valid_to=None,
+    )
+
+    insert_pricing(db, model=model)
+
+    current_pricing = get_current_pricing(db, country, provider, pricing_model_name)
+    assert current_pricing is not None
+    assert current_pricing.monthly_subscription_price == monthly_price
+    assert current_pricing.yearly_subscription_price == yearly_price
+
+    # Clean up
+    db.pricing.delete_many(
+        {"country": country, "provider": provider, "pricing_model_name": pricing_model_name}
+    )
+
+
+def test_insert_pricing_only_monthly(db):
+    """
+    Test insertion of a pricing model with only monthly subscription.
+    """
+    country = "TestCountry"
+    provider = "TestProvider"
+    pricing_model_name = "TestModelMonthlyOnly"
+    monthly_price = 0.99
+    price_kwh = 0.30
+
+    model = PricingModel(
+        country=country,
+        currency="€",
+        provider=provider,
+        pricing_model_name=pricing_model_name,
+        price_kWh=price_kwh,
+        monthly_subscription_price=monthly_price,
+        yearly_subscription_price=None,
+        initial_subscription_price=None,
+        version=1,
+        _id=None,
+        valid_from=None,
+        valid_to=None,
+    )
+
+    insert_pricing(db, model=model)
+
+    current_pricing = get_current_pricing(db, country, provider, pricing_model_name)
+    assert current_pricing is not None
+    assert current_pricing.monthly_subscription_price == monthly_price
+    assert current_pricing.yearly_subscription_price is None
+
+    # Clean up
+    db.pricing.delete_many(
+        {"country": country, "provider": provider, "pricing_model_name": pricing_model_name}
+    )
+
+
+def test_insert_pricing_free_model(db):
+    """
+    Test insertion of a free pricing model (no subscriptions).
+    """
+    country = "TestCountry"
+    provider = "TestProvider"
+    pricing_model_name = "TestModelFree"
+    price_kwh = 0.79
+
+    model = PricingModel(
+        country=country,
+        currency="€",
+        provider=provider,
+        pricing_model_name=pricing_model_name,
+        price_kWh=price_kwh,
+        monthly_subscription_price=None,
+        yearly_subscription_price=None,
+        initial_subscription_price=None,
+        version=1,
+        _id=None,
+        valid_from=None,
+        valid_to=None,
+    )
+
+    insert_pricing(db, model=model)
+
+    current_pricing = get_current_pricing(db, country, provider, pricing_model_name)
+    assert current_pricing is not None
+    assert current_pricing.monthly_subscription_price is None
+    assert current_pricing.yearly_subscription_price is None
+
+    # Clean up
+    db.pricing.delete_many(
+        {"country": country, "provider": provider, "pricing_model_name": pricing_model_name}
+    )
+
+
+def test_migration_from_old_subscription_field(db):
+    """
+    Test that old subscription_price field is migrated to yearly_subscription_price.
+    """
+    country = "TestCountry"
+    provider = "TestProvider"
+    pricing_model_name = "TestModelMigration"
+    subscription_price = 10.0
+    price_kwh = 0.30
+
+    # Insert directly into MongoDB with old schema
+    coll = db.pricing
+    document = {
+        "country": country,
+        "currency": "€",
+        "provider": provider,
+        "pricing_model_name": pricing_model_name,
+        "price_kWh": price_kwh,
+        "subscription_price": subscription_price,  # Old field
+        "version": 1,
+        "valid_from": datetime.now(ZoneInfo("UTC")),
+        "valid_to": None,
+    }
+    coll.insert_one(document)
+
+    # Retrieve using get_current_pricing (should migrate)
+    current_pricing = get_current_pricing(db, country, provider, pricing_model_name)
+    assert current_pricing is not None
+    assert current_pricing.yearly_subscription_price == subscription_price
+    assert current_pricing.monthly_subscription_price is None
+    assert current_pricing.initial_subscription_price == subscription_price
+
+    # Clean up
+    db.pricing.delete_many(
+        {"country": country, "provider": provider, "pricing_model_name": pricing_model_name}
+    )
+
+
+def test_update_detects_subscription_period_changes(db):
+    """
+    Test that updating from yearly-only to monthly-only is detected as a change.
+    """
+    country = "TestCountry"
+    provider = "TestProvider"
+    pricing_model_name = "TestModelPeriodChange"
+    price_kwh = 0.30
+
+    # Insert with yearly subscription
+    model = PricingModel(
+        country=country,
+        currency="€",
+        provider=provider,
+        pricing_model_name=pricing_model_name,
+        price_kWh=price_kwh,
+        monthly_subscription_price=None,
+        yearly_subscription_price=10.0,
+        initial_subscription_price=None,
+        version=1,
+        _id=None,
+        valid_from=None,
+        valid_to=None,
+    )
+    insert_pricing(db, model=model)
+
+    # Update to monthly subscription
+    updated_model = PricingModel(
+        country=country,
+        currency="€",
+        provider=provider,
+        pricing_model_name=pricing_model_name,
+        price_kWh=price_kwh,
+        monthly_subscription_price=0.99,
+        yearly_subscription_price=None,
+        initial_subscription_price=None,
+        version=1,
+        _id=None,
+        valid_from=None,
+        valid_to=None,
+    )
+    update_pricing(db, new_data=updated_model)
+
+    # Verify update was detected
+    history = get_pricing_history(db, country, provider, pricing_model_name)
+    assert len(history) == 2, "Should have 2 versions after update"
+
+    # Verify archived version has yearly
+    archived = [p for p in history if p.valid_to is not None][0]
+    assert archived.yearly_subscription_price == 10.0
+    assert archived.monthly_subscription_price is None
+
+    # Verify current version has monthly
+    current = get_current_pricing(db, country, provider, pricing_model_name)
+    assert current.monthly_subscription_price == 0.99
+    assert current.yearly_subscription_price is None
+
+    # Clean up
+    db.pricing.delete_many(
+        {"country": country, "provider": provider, "pricing_model_name": pricing_model_name}
     )
 
 

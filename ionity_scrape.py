@@ -155,33 +155,64 @@ def get_passport_prices_for_country(country_names, driver, wait):
                         e,
                     )
                     continue
-                if (
-                    len(text_lines) >= 4
-                    and text_lines[2] == "plus"
-                    and text_lines[4] == "per year"
-                ):
-                    # Extract subscription terms
+                # Initialize subscription tracking
+                monthly_terms = None
+                yearly_terms = None
+
+                # Check if there's a subscription section
+                if len(text_lines) >= 5 and text_lines[2] == "plus":
+                    # Extract first subscription period
                     try:
-                        subscription_terms = extract_subscription_price(
-                            text_lines[3], text_lines[4]
+                        first_period_terms = extract_subscription_price(text_lines[3], text_lines[4])
+
+                        # Determine which period this is
+                        if first_period_terms.monthly_additional_price:
+                            monthly_terms = first_period_terms
+                        elif first_period_terms.yearly_additional_price:
+                            yearly_terms = first_period_terms
+
+                        logger.debug(
+                            "Extracted first subscription: %s %s for %s",
+                            text_lines[3],
+                            text_lines[4],
+                            pricing_model_name
                         )
-                        if subscription_terms:
-                            logger.debug(
-                                "Subscription terms: %s %s",
-                                subscription_terms.yearly_additional_price.amount,
-                                subscription_terms.yearly_additional_price.currency,
-                            )
-                        else:
-                            logger.debug("No subscription fees (free subscription)")
                     except ValueError as e:
-                        logger.warning(
-                            "Failed to extract subscription price for %s in %s: %s",
+                        logger.error(
+                            "Failed to extract first subscription price for %s in %s: %s",
                             pricing_model_name,
                             country,
                             e,
                         )
-                        exit(1)
-                        subscription_terms = None
+                        continue
+
+                    # Check for second subscription period
+                    if len(text_lines) >= 8 and text_lines[5].lower() == "or":
+                        try:
+                            second_period_terms = extract_subscription_price(text_lines[6], text_lines[7])
+
+                            # Determine which period this is
+                            if second_period_terms.monthly_additional_price:
+                                monthly_terms = second_period_terms
+                            elif second_period_terms.yearly_additional_price:
+                                yearly_terms = second_period_terms
+
+                            logger.debug(
+                                "Extracted second subscription: %s %s for %s",
+                                text_lines[6],
+                                text_lines[7],
+                                pricing_model_name
+                            )
+                        except ValueError as e:
+                            logger.warning(
+                                "Failed to extract second subscription price for %s in %s: %s",
+                                pricing_model_name,
+                                country,
+                                e,
+                            )
+                            # Continue with only the first period
+                else:
+                    logger.debug("No subscription fees for %s (free model)", pricing_model_name)
 
                 # Create pricing model
                 model = PricingModel(
@@ -190,26 +221,43 @@ def get_passport_prices_for_country(country_names, driver, wait):
                     provider="Ionity",
                     pricing_model_name=pricing_model_name,
                     price_kWh=price_per_kwh.amount,
-                    subscription_price=(
-                        subscription_terms.yearly_additional_price.amount
-                        if subscription_terms
-                        else 0.0
+                    monthly_subscription_price=(
+                        monthly_terms.monthly_additional_price.amount
+                        if monthly_terms and monthly_terms.monthly_additional_price
+                        else None
                     ),
+                    yearly_subscription_price=(
+                        yearly_terms.yearly_additional_price.amount
+                        if yearly_terms and yearly_terms.yearly_additional_price
+                        else None
+                    ),
+                    initial_subscription_price=None,  # Deprecated for new records
                     version=1,
                     _id=None,
                     valid_from=archive_timestamp,
                     valid_to=None,
                 )
                 models.append(model)
+
+                # Build subscription description dynamically
+                subscription_parts = []
+                if model.monthly_subscription_price is not None:
+                    subscription_parts.append(
+                        f"Monthly: {model.monthly_subscription_price} {price_per_kwh.currency}"
+                    )
+                if model.yearly_subscription_price is not None:
+                    subscription_parts.append(
+                        f"Yearly: {model.yearly_subscription_price} {price_per_kwh.currency}"
+                    )
+                subscription_desc = ", ".join(subscription_parts) if subscription_parts else "Free"
+
                 logger.info(
-                    "Created pricing model for %s - %s: %s %s/kWh, "
-                    "Subscription: %s %s/month",
+                    "Created pricing model for %s - %s: %s %s/kWh, Subscription: %s",
                     country,
                     pricing_model_name,
                     price_per_kwh.amount,
                     price_per_kwh.currency,
-                    model.subscription_price,
-                    price_per_kwh.currency,
+                    subscription_desc,
                 )
             except (IndexError, ValueError) as e:
                 logger.error(
