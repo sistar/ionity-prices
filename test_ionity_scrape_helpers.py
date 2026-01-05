@@ -9,53 +9,41 @@ from ionity_scrape_helpers import (
 
 
 def test_extract_eur_subscription_price():  # pylint: disable=missing-function-docstring
-    terms = extract_subscription_price(
-        "plus €7.99 for the first month; then €11.99 per month.*"
-    )
+    terms = extract_subscription_price("€11.99", "per year")
     assert terms is not None, "Terms should not be None"
     assert (
-        terms.initial_price.amount == 7.99
-    ), "Subscription price should be 11.99 - ignore the first month price"
-    assert terms.initial_price.currency == "€", "Currency should be €"
-    assert terms is not None, "Terms should not be None"
-    assert (
-        terms.monthly_price.amount == 11.99
-    ), "Subscription price should be 11.99 - ignore the first month price"
-    assert terms.monthly_price.currency == "€", "Currency should be €"
+        terms.yearly_additional_price.amount == 11.99
+    ), "Subscription price should be 11.99"
+    assert terms.yearly_additional_price.currency == "€", "Currency should be €"
 
 
 def test_extract_gbp_subscription_price():  # pylint: disable=missing-function-docstring
-    terms = extract_subscription_price(
-        "plus £7.99 for the first month; then £11.99 per month.*"
-    )
+    terms = extract_subscription_price("£11.99", "per year")
     assert terms is not None, "Terms should not be None"
     assert (
-        terms.monthly_price.amount == 11.99
-    ), "Subscription price should be 11.99 - ignore the first month price"
-    assert terms.monthly_price.currency == "£", "Currency should be £"
+        terms.yearly_additional_price.amount == 11.99
+    ), "Subscription price should be 11.99"
+    assert terms.yearly_additional_price.currency == "£", "Currency should be £"
 
 
 def test_extract_chf_subscription_price():  # pylint: disable=missing-function-docstring
-    terms = extract_subscription_price(
-        "plus 3.99 CHF for the first month; then 5.99 CHF per month.*"
-    )
+    terms = extract_subscription_price("5.99 CHF", "per year")
     assert terms is not None, "Terms should not be None"
     assert (
-        terms.monthly_price.amount == 5.99
-    ), "Subscription price should be 5.99 - ignore the first month price"
-    assert terms.monthly_price.currency == "CHF", "Currency should be CHF"
+        terms.yearly_additional_price.amount == 5.99
+    ), "Subscription price should be 5.99"
+    assert terms.yearly_additional_price.currency == "CHF", "Currency should be CHF"
 
 
 def test_extract_no_subscription_price():  # pylint: disable=missing-function-docstring
-    terms = extract_subscription_price(
-        "Charge on-site and pay contactless without any monthly fees."
-    )
-    assert terms is None, "Subscription Terms should be None"
+    # Test with text that has no price pattern
+    with pytest.raises(ValueError):
+        extract_subscription_price("without any fees", "per year")
 
 
 def test_extract_subscription_price_no_match():  # pylint: disable=missing-function-docstring
     with pytest.raises(ValueError):
-        extract_subscription_price("No match here.")
+        extract_subscription_price("No match here", "period text")
 
 
 def test_extract_amount_currency_postfix():  # pylint: disable=missing-function-docstring
